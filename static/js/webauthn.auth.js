@@ -50,14 +50,18 @@ $('#register').submit(function(event) {
 
     getMakeCredentialsChallenge({username, name})
         .then((response) => {
+            console.log('get server chanllenge: ', response)
             let publicKey = preformatMakeCredReq(response);
+            console.log('publicKey: ', publicKey)
             return navigator.credentials.create({ publicKey })
         })
         .then((response) => {
+            console.log('authenticator MakeCredential: ', response)
             let makeCredResponse = publicKeyCredentialToJSON(response);
             return sendWebAuthnResponse(makeCredResponse)
         })
         .then((response) => {
+            console.log('server vertification: ', response)
             if(response.status === 'ok') {
                 loadMainContainer()   
             } else {
@@ -98,7 +102,7 @@ $('#login').submit(function(event) {
 
     getGetAssertionChallenge({username})
         .then((response) => {
-            console.log(response)
+            console.log('Authentication challenge: ', response)
             let publicKey = preformatGetAssertReq(response);
             return navigator.credentials.get({ publicKey })
         })

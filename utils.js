@@ -1,6 +1,8 @@
 const crypto    = require('crypto');
 const base64url = require('base64url');
 const cbor      = require('cbor');
+const { Certificate } = require('@fidm/x509');
+const iso_3166_1 = require('iso-3166-1');
 
 /**
  * U2F Presence constant
@@ -46,7 +48,7 @@ let generateServerMakeCredRequest = (username, displayName, id) => {
         challenge: randomBase64URLBuffer(32),
 
         rp: {
-            name: "ACME Corporation"
+            name: "FIDO Examples Corporation"
         },
 
         user: {
@@ -76,7 +78,7 @@ let generateServerGetAssertion = (authenticators) => {
         allowCredentials.push({
               type: 'public-key',
               id: authr.credID,
-              transports: ['usb', 'nfc', 'ble']
+              transports: ['internal', 'hybrid', 'usb', 'nfc', 'ble']
         })
     }
     return {
@@ -197,6 +199,8 @@ let verifyAuthenticatorAttestationResponse = (webAuthnResponse) => {
     let attestationBuffer = base64url.toBuffer(webAuthnResponse.response.attestationObject);
     let ctapMakeCredResp  = cbor.decodeAllSync(attestationBuffer)[0];
 
+    console.log('ctapMakeCredResp: ', ctapMakeCredResp)
+
     let response = {'verified': false};
     if(ctapMakeCredResp.fmt === 'fido-u2f') {
         let authrDataStruct = parseMakeCredAuthData(ctapMakeCredResp.authData);
@@ -222,6 +226,22 @@ let verifyAuthenticatorAttestationResponse = (webAuthnResponse) => {
                 credID: base64url.encode(authrDataStruct.credID)
             }
         }
+    } else if (ctapMakeCredResp.fmt === 'none') {
+        let authrDataStruct = parseMakeCredAuthData(ctapMakeCredResp.authData);
+        if(!(authrDataStruct.flags & U2F_USER_PRESENTED))
+            throw new Error('User was NOT presented during authentication!');
+
+        let publicKey = COSEECDHAtoPKCS(authrDataStruct.COSEPublicKey);
+        
+        response.verified = true;
+        response.authrInfo = {
+            fmt: 'none',
+            publicKey: base64url.encode(publicKey),
+            counter: authrDataStruct.counter,
+            credID: base64url.encode(authrDataStruct.credID)
+        }
+    } else {
+        throw new Error('Unsupported attestation format! ' + ctapMakeCredResp.fmt);
     }
 
     return response
@@ -262,6 +282,8 @@ let verifyAuthenticatorAssertionResponse = (webAuthnResponse, authenticators) =>
     let authr = findAuthr(webAuthnResponse.id, authenticators);
     let authenticatorData = base64url.toBuffer(webAuthnResponse.response.authenticatorData);
 
+    console.log('authr: ', authr)
+
     let response = {'verified': false};
     if(authr.fmt === 'fido-u2f') {
         let authrDataStruct  = parseGetAssertAuthData(authenticatorData);
@@ -283,6 +305,26 @@ let verifyAuthenticatorAssertionResponse = (webAuthnResponse, authenticators) =>
 
             authr.counter = authrDataStruct.counter
         }
+    }
+
+    if (authr.fmt === 'none') {
+        let authrDataStruct = parseGetAssertAuthData(authenticatorData);
+        if(!(authrDataStruct.flags & U2F_USER_PRESENTED))
+            throw new Error('User was NOT presented during authentication!');
+
+        let publicKey = ASN1toPEM(base64url.toBuffer(authr.publicKey));
+        let signature = base64url.toBuffer(webAuthnResponse.response.signature);
+        
+        // 使用与其他格式相同的方式验证签名
+        response.verified = verifySignature(signature, signatureBase, publicKey);
+
+        if(response.verified) {
+            if(response.counter <= authr.counter)
+                throw new Error('Authr counter did not increase!');
+
+            authr.counter = authrDataStruct.counter
+        }
+    
     }
 
     return response
